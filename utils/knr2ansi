@@ -1,0 +1,293 @@
+#!/usr/bin/perl
+# -*- mode: perl -*-
+# $Id: knr2ansi,v 1.1 2001/11/03 22:34:09 gray Exp $
+#
+# convert K&R C to ANSI C
+#
+
+$backups=1;			# Should the backups be made
+$backup_prefix="";		# Prefix for backup file name
+$backup_suffix="~";		# Suffix for backup file name
+$keep_prefix="";		# Prefix for keepfile name
+$keep_suffix=".keep";		# Suffix for keepfile name
+
+# Collect command line args
+while ($_ = $ARGV[0], /^-/) {
+    shift;
+    last if /^--$/;
+    /^-d(.*)/ && ($debug = $1);
+    /^-v/ && $verbose++;
+    /^-o/ && ($stdout=1);
+    /^-bs(.*)/ && ($backup_suffix=$1);
+    /^-bp(.*)/ && ($backup_prefix=$1);
+    /^-nb/ && ($backups=0);
+    /^-ks(.*)/ && ($keep_suffix=$1);
+    /^-kp(.*)/ && ($keep_prefix=$1);
+    /^--help/ && help();
+    # other switches
+}
+
+if ($#ARGV<0) {			# No args left -- print usage & exit
+    help();
+}
+
+# Set up various names
+if ($stdout) {
+    $temp=STDOUT;
+} else {
+    if ($ENV{"TEMP"}) {
+	$tempdir = $ENV{"TEMP"};
+    } else {
+	$tempdir = "/tmp";
+    }
+    if ($tempdir !~ /..*\//) {
+	$tempdir=$tempdir."/";
+    }				
+    $tempname=$tempdir."knr2ansi.$$";
+    $temp=100;
+}
+
+# ##########################################
+# main loop
+#
+foreach $fn(@ARGV) {
+    $filename = $fn;
+    open(INPUT, $filename) or die "Can't open $filename ($!)\n";
+    $. = 1;
+    $need_stdarg=0;
+    
+    if (!$stdout) {
+	open($temp, ">".$tempname) or die "Can't open $tempname ($!)\n";
+    }
+    parse();
+
+    close INPUT;
+    if (!$stdout) {
+	close $temp;
+
+	if ($backups) {
+	    $outname=$backup_prefix.$filename.$backup_suffix;
+	    if (copy($filename, $outname, 0)) {
+		die("Can't copy $tempname to $outname: $!\n");
+	    }
+	}
+	
+	if (! -w $filename) {
+	    $outname=$keep_prefix.$filename.$keep_suffix;
+	    warning("Can't write to $filename: saving to $outname");
+	} else {
+	    $outname=$filename;
+	}
+	if (copy($tempname, $outname, $need_stdarg)) {
+	    error("Can't copy $tempname to $outname:".$!);
+	} 
+    }
+}
+# cleanup
+unlink($temp) unless ($stdout);
+
+# End of main
+#########################################################
+
+sub help {
+    print "$0: K&R to ANSI source converter\n";
+    print "usage: $0 [-v][-o][-bp pref][-bs suf][-kp pref][-kp suf] files...\n";
+    print "  -v        Verbose mode\n";
+    print "  -o        Print to standard output\n";
+    print "  -bs suf   Set backup file suffix\n";
+    print "  -bp pref  Set backup file prefix\n";
+    print "  -nb       No backups\n";
+    print "  -ks       Set keep file suffix\n";
+    print "  -kp       Set keep file prefix\n";
+    print "  --help    Display this help\n";
+    exit 0;
+}
+
+sub copy {
+    my($from,$to,$stdarg)=@_;
+    
+    open(INPUT, $from) or die "Can't open $from (".$!.")\n";
+    open(OUTPUT, ">".$to) or die "Can't open $to (".$!.")\n";
+
+    while (<INPUT>) {
+	if ($stdarg && /\#[ \t]*include[ \t]<varargs\.h>/) {
+	    print OUTPUT "#include <stdarg.h>\n";
+	    $stdarg=0;
+	} else {
+	    print OUTPUT;
+	}
+    }
+    if ($stdarg) {
+	message("$filename needs stdarg.h");
+    }
+    close INPUT, OUTPUT;
+    return 0;
+}
+
+$dcl_header=1;
+
+sub parse {
+    while (<INPUT>) {
+	$print=1;
+      SWITCH: {
+	/\/\*.*\*\// && last SWITCH;
+	/\/\*/ && do {
+	    last SWITCH;
+	};
+	/\*\// && do {
+	    last SWITCH;
+	};
+	/^[a-zA-Z_][^\(]*\(.*\)[ \t]*$/ && do {
+	    parse_header($_);
+	    $print=0;
+	    last SWITCH;
+	};
+	/^[a-zA-Z_][^\(]*\([^)]*$/ && do {
+	    chop;
+	    $line=$_;
+	    COLLECT: while (<INPUT>) {
+		chop;
+		if (/([^)]*\))[ \t]*(.*)/) {
+		   $line = $line." ".$1;
+		   $trail=$2;
+		   last COLLECT;
+	        } else {
+		   $line=$line.$_;
+	        }
+	    }
+            if ($trail) {
+		$_=$line."\n";
+	    } else {
+		parse_header($line);
+	    }
+            $print=0;
+            last SWITCH;
+	};
+    }
+
+    if ($print) {
+	print $temp $_;
+    }
+}
+
+sub parse_header {
+    my($line)=@_;
+
+    $_=$line;
+    # Function declaration header
+    if ($brace_lev) {
+	warning("function declaration inside a block?", $_);
+	last SWITCH if ($strict);
+    }
+    # Parse the header
+    ($func_name, $rest) = /([a-zA-Z_][^\(]*\()(.*)/;
+    # collect the arguments
+    $argc=0;
+    while ($rest =~ /[ \t]*([^,]+)[ \t]*,(.*)/) {
+	($argv[$argc],$rest) = ($1, $2);
+#		print STDERR "(`$argv[$argc]';`$rest')\n";
+	$argc++;
+    }
+    $rest =~ /[ \t]*([^)]+)\)/;
+    $argv[$argc++] = $1;
+    get_args();
+
+}
+
+sub get_args() {
+    my($comment,$rest)=(0,"");
+    
+  LOOP:   while (<INPUT>) {
+      # eliminate possible embedded single-line comments 
+      while (/(.*)\/\*.*\*\/(.*)/) {
+	  $_ = $1.$2;
+      }
+    
+    SWITCH: {
+	/({.*)/ && do {$rest=$1; last LOOP};
+        /[^,]*,.*/ && do {	
+	    # Declaration a la `char *a, *b;':
+	    # Strip off the data type and then loop thru the
+	    # rest of the string collecting parm names
+	    ($type,$_) = /[ \t]*([^,*\(]+)[ \t]+([^,]+[ \t]*,.*)/;
+	    while (($a,$_)=/[ \t]*([^;,]+)[ \t]*[;,](.*)/) {
+		setarg($a, $type);
+	    }
+	    last SWITCH;
+	};
+	/[ \t]*(.*)[ \t]([ \t*]*)\([ \t]*([*a-zA-Z_][a-zA-Z_0-9]*)[ \t]*\)[ \t]*(\([^)]*\))[ \t]*;/ && do {
+	      setarg($2."(".$3.")".$4, $1);
+	      last SWITCH;
+	  };
+	/[ \t]*(.*)[ \t]([ \t*]*[a-zA-Z_][a-zA-Z_0-9\[\]]*)[ \t]*;/ && do {
+	    setarg($2, $1);
+	    last SWITCH;
+	};
+	/\/\*/ && do {
+	  SKIP_COMMENT: while (<INPUT>) { 
+	      last SKIP_COMMENT if (/.*\*\//);
+	  }
+	  last SWITCH;
+	};
+	/va_dcl[ \t]*;?/ && do {
+	    vararg();
+	    last SWITCH;
+	};
+	# default
+        warning("ignoring unhandled construct", $_) unless(/[ \t]*/);
+	}
+    }
+      print $temp $func_name;
+      for ($i=0; $i<$argc; $i++) {
+	  if ($decl[$i]) {
+	      print $temp "$decl[$i]";
+	  } else {
+	      warning("no type for $argv[$i] argument of $func_name.");
+	      print $temp "int $argv[$i]";
+	  }
+	  if ($i!=$argc-1) {
+	      print $temp ", ";
+	  } else {
+	      print $temp ")\n$rest\n";
+	  }
+      }
+  }
+}				
+
+sub setarg {
+    my($parm, $type) = @_;
+    
+    ($prefix, $name, $postfix) = $parm =~ /([^a-zA-Z_]*)([a-zA-Z_][a-zA-Z_0-9]*)(.*)/;
+    for ($i=0; $i<$argc; $i++) {
+	if ($argv[$i] eq $name) {
+	    $decl[$i] = $type." ".$parm;
+	    return;
+	}
+    }
+    warning("declaration of parameter `$name' but no such parameter");
+}
+
+sub vararg() {
+    $decl[$argc-1] = "...";
+    $need_stdarg=1;
+}
+
+sub warning {
+    my($msg, $trail) = @_;
+    print STDERR "$filename:$.:warning: $msg";
+    print STDERR " near $trail" if ($trail);
+    print STDERR "\n";
+}
+
+sub error {
+    my($msg, $trail) = @_;
+    print STDERR "$filename:$.:error: $msg";
+    print STDERR " near $trail" if ($trail);
+    print STDERR "\n";
+}
+    
+sub message {
+    my($msg) = @_;
+    print STDERR "$msg\n";
+}
+    

@@ -1,0 +1,107 @@
+dnl Process this file with autoconf to produce a configure script.
+AC_REVISION($Revision: 1.1 $)
+AC_INIT(server/dict.c)
+AC_CANONICAL_SYSTEM
+AM_INIT_AUTOMAKE(gjdict, 1.0)
+AM_CONFIG_HEADER(config.h)
+
+AC_SUBST(BUILD_TARGET)
+
+case $target in
+	*-*-linux*)	;;
+
+	*-*-solaris*)	ADDLIBS="-lnsl -lsocket"; 
+			LIBS="$LIBS $ADDLIBS -L/usr/ucblib"
+			;;
+
+	*-*-bsd*)	;;
+esac
+AC_DEFINE_UNQUOTED(BUILD_TARGET, "$target")
+
+dnl Checks for programs.
+AC_PROG_AWK
+AC_PROG_YACC
+AC_PROG_CC
+AC_PROG_CPP
+dnl AC_PROG_LEX
+AC_PROG_INSTALL
+dnl AC_PROG_LN_S
+AC_PROG_MAKE_SET
+AC_PROG_RANLIB
+
+dnl Checks for libraries.
+dnl AC_CHECK_LIB(FS, main)
+
+dnl Checks for header files.
+AC_HEADER_DIRENT dnl not needed ?
+AC_HEADER_STDC
+AC_HEADER_SYS_WAIT
+AC_CHECK_HEADERS(fcntl.h limits.h strings.h sys/time.h syslog.h unistd.h)
+
+dnl Checks for typedefs, structures, and compiler characteristics.
+AC_C_CONST
+AC_C_INLINE
+AC_TYPE_PID_T
+AC_TYPE_OFF_T
+AC_TYPE_SIZE_T
+AC_HEADER_TIME
+
+dnl Checks for library functions.
+AC_FUNC_MEMCMP
+AC_FUNC_SETVBUF_REVERSED
+AC_TYPE_SIGNAL
+AC_FUNC_VPRINTF
+AC_CHECK_FUNCS(gethostname select socket strdup strerror strtol getopt_long)
+
+# Check X configuration
+AC_PATH_XTRA
+
+XAW="Xaw"
+AC_ARG_WITH(xaw3d,
+ [  --with-xaw3d                Use Xaw3d ],
+ [XAW="Xaw3d"])
+
+AC_SUBST(XLDADD)
+XLDADD="-l$XAW -lXmu -lXt"
+
+AC_SUBST(fontdir)
+fontdir='$(pkgdatadir)'
+AC_ARG_WITH(x-fontdir,
+ [  --with-fontdir=PATH         Use specified font path ],
+ [ fontdir=$withval ])
+
+##FIXME
+AC_SUBST(MKFONTDIR)
+MKFONTDIR=mkfontdir
+AC_SUBST(BDFTOPCF)
+BDFTOPCF=bdftopcf
+AC_SUBST(GZIP)
+GZIP=gzip
+
+log_facility="LOG_LOCAL1"
+AC_MSG_CHECKING(for syslog facility to use)
+AC_ARG_WITH(log-facility,
+ [  --with-log-facility=facility   enable logging to the given facility],
+ AC_TRY_COMPILE([#include <syslog.h>], int lf = $withval,
+	log_facility=$withval))
+AC_DEFINE_UNQUOTED(LOGFACILITY, $log_facility)
+AC_MSG_RESULT($log_facility)
+
+
+AC_SUBST(inputdictpath)
+inputdictpath=/usr/local/lib
+AC_ARG_WITH(input-dict-path,
+ [  --with-input-dict-path	Specify alternate path for input dictionaries],
+ [inputdictpath=$withval])
+
+AC_SUBST(dictdir)
+dictdir='$(pkgdatadir)'
+AC_ARG_WITH(dict-path,
+ [  --with-dict-path	        Specify alternate path for dictionaries],
+ [dictdir=$withval])
+
+
+AC_OUTPUT(Makefile include/Makefile utils/Makefile dbs/Makefile 
+          lib/Makefile makedict/Makefile
+          server/Makefile client/Makefile fonts/Makefile)
+
